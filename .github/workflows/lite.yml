@@ -1,0 +1,55 @@
+name: lite
+
+# Makes a light 720p copy (~1.2 Mbps) of finished videos that are already in Google Drive, for slow connections,
+# and puts it next to the original as "<name> 720p.mp4". One machine per video, all at once.
+# Input: {"files":["01 Projects/Video Studio/Final/llb/company-law/C-1 Name.mp4", ...]}
+# Needs the repo secret RCLONE_CONF.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "JSON: {files:[drive path]}"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      files: ${{ steps.m.outputs.files }}
+    steps:
+      - id: m
+        env:
+          JOB: ${{ inputs.job }}
+        run: echo "files=$(jq -c '.files' <<<"$JOB")" >> "$GITHUB_OUTPUT"
+
+  lite:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        file: ${{ fromJSON(needs.plan.outputs.files) }}
+    env:
+      SRC: ${{ matrix.file }}
+    steps:
+      - name: Tools
+        run: |
+          case "$SRC" in *..*|/*|*[!A-Za-z0-9\ ._/-]*|*720p.mp4) echo "bad path"; exit 1;; esac
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+          curl -sSL https://downloads.rclone.org/v1.76.0/rclone-v1.76.0-linux-amd64.zip -o rclone.zip
+          unzip -q rclone.zip && sudo install rclone-v1.76.0-linux-amd64/rclone /usr/local/bin/rclone
+      - name: Make the 720p copy
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone && printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          rclone copyto "gdrive:$SRC" in.mp4
+          ffmpeg -v error -y -i in.mp4 -vf scale=-2:720 -c:v libx264 -preset veryfast -crf 25 -maxrate 1300k -bufsize 2600k -c:a aac -b:a 96k -movflags +faststart lite.mp4
+          ls -la in.mp4 lite.mp4
+          rclone copyto lite.mp4 "gdrive:${SRC%.mp4} 720p.mp4" --drive-chunk-size 64M
+          rm ~/.config/rclone/rclone.conf
