@@ -1,0 +1,64 @@
+name: finish
+
+# Joins the chunks of a finished render run, adds the audio track and puts the final MP4 straight into Google Drive,
+# so the big file never has to go through the laptop's slow upload.
+# Input (from tools/cloud-render.mjs):
+#   {"id":"C-1","run":"<render run id>","chunks":["1-4","5-8",...],"audio":"C-1-audio.m4a","dest":"01 Projects/Video Studio/Final/llb/company-law/C-1 Name.mp4"}
+# Needs the repo secret RCLONE_CONF (an rclone config with a Google Drive remote called "gdrive").
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "JSON: {id, run, chunks:[r], audio, dest}"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  finish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      JOB: ${{ inputs.job }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+          curl -sSL https://downloads.rclone.org/v1.76.0/rclone-v1.76.0-linux-amd64.zip -o rclone.zip
+          unzip -q rclone.zip && sudo install rclone-v1.76.0-linux-amd64/rclone /usr/local/bin/rclone
+      - name: Read job
+        run: |
+          ID=$(jq -r '.id' <<<"$JOB" | tr -cd 'A-Za-z0-9-')
+          RUN=$(jq -r '.run' <<<"$JOB" | tr -cd '0-9')
+          AUDIO=$(jq -r '.audio' <<<"$JOB" | tr -cd 'A-Za-z0-9._-')
+          DEST=$(jq -r '.dest' <<<"$JOB")
+          case "$DEST" in *..*|/*|*[!A-Za-z0-9\ ._/-]*) echo "bad dest"; exit 1;; esac
+          { echo "ID=$ID"; echo "RUN=$RUN"; echo "AUDIO=$AUDIO"; echo "DEST=$DEST"; } >> "$GITHUB_ENV"
+      - name: Fetch chunks and audio
+        run: |
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -D arts
+          gh release download packs -R "$GITHUB_REPOSITORY" -p "$AUDIO" -O audio.m4a
+          : > list.txt
+          for r in $(jq -r '.chunks[]' <<<"$JOB"); do
+            case "$r" in *[!0-9-]*) echo "bad chunk"; exit 1;; esac
+            f="arts/chunk-$r/$ID-v3-$r.mp4"
+            [ -s "$f" ] || { echo "missing chunk $r"; exit 1; }
+            echo "file '$PWD/$f'" >> list.txt
+          done
+      - name: Join and add audio
+        run: |
+          ffmpeg -v error -y -f concat -safe 0 -i list.txt -c copy video.mp4
+          ffmpeg -v error -y -i video.mp4 -i audio.m4a -map 0:v -map 1:a -c copy -shortest -movflags +faststart final.mp4
+          ffprobe -v error -show_entries format=duration -of csv=p=0 final.mp4
+          ls -la final.mp4
+      - name: Put into Google Drive
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone && printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          rclone copyto final.mp4 "gdrive:$DEST" --drive-chunk-size 64M --stats-one-line --stats 30s
+          rm ~/.config/rclone/rclone.conf
