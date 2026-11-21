@@ -2,15 +2,15 @@ name: render
 
 # Renders the chunks of one video in parallel, one machine per chunk.
 # Input (from tools/cloud-render.mjs in the private project):
-#   {"id":"C-4","chunks":[{"r":"1-7","file":"<public Google Drive file id of C-4-v3-1-7.tgz>"}, ...]}
-# Each chunk is a built HyperFrames composition packed as .tgz on a public Drive folder.
+#   {"id":"C-4","pack":"C-4-pack.tgz","chunks":["1-3","4-6", ...]}
+# The pack is a release asset (release "packs"): every asset once + each chunk's HTML (see unpack.mjs).
 # Output: one artifact per chunk ("chunk-<r>") holding <id>-v3-<r>.mp4, kept for 3 days.
 
 on:
   workflow_dispatch:
     inputs:
       job:
-        description: "JSON: {id, chunks:[{r, file}]}"
+        description: "JSON: {id, pack, chunks:[r]}"
         required: true
 
 permissions:
@@ -22,12 +22,14 @@ jobs:
     outputs:
       chunks: ${{ steps.m.outputs.chunks }}
       id: ${{ steps.m.outputs.id }}
+      pack: ${{ steps.m.outputs.pack }}
     steps:
       - id: m
         env:
           JOB: ${{ inputs.job }}
         run: |
           echo "chunks=$(jq -c '.chunks' <<<"$JOB")" >> "$GITHUB_OUTPUT"
+          echo "pack=$(jq -r '.pack' <<<"$JOB" | tr -cd 'A-Za-z0-9._-')" >> "$GITHUB_OUTPUT"
           echo "id=$(jq -r '.id' <<<"$JOB" | tr -cd 'A-Za-z0-9-')" >> "$GITHUB_OUTPUT"
 
   render:
@@ -41,8 +43,9 @@ jobs:
         chunk: ${{ fromJSON(needs.plan.outputs.chunks) }}
     env:
       ID: ${{ needs.plan.outputs.id }}
-      R: ${{ matrix.chunk.r }}
-      FILE: ${{ matrix.chunk.file }}
+      R: ${{ matrix.chunk }}
+      PACK: ${{ needs.plan.outputs.pack }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -53,20 +56,19 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
           npm ci --no-audit --no-fund
-      - name: Fetch chunk from Drive
+      - name: Fetch pack, rebuild chunk
         run: |
           case "$R" in *[!0-9-]*) echo "bad chunk name"; exit 1;; esac
-          case "$FILE" in *[!A-Za-z0-9_-]*) echo "bad file id"; exit 1;; esac
-          curl -sSL --retry 3 -o chunk.tgz "https://drive.usercontent.google.com/download?id=$FILE&export=download&confirm=t"
-          mkdir chunk && tar -xzf chunk.tgz -C chunk
-          ls chunk
+          gh release download packs -R "$GITHUB_REPOSITORY" -p "$PACK" -O pack.tgz
+          mkdir pack && tar -xzf pack.tgz -C pack
+          node unpack.mjs pack "$R" chunk
       - name: Render
         run: |
           cd chunk
           npx hyperframes render --quality standard --workers auto --protocol-timeout 1200000 -o "$GITHUB_WORKSPACE/$ID-v3-$R.mp4"
       - uses: actions/upload-artifact@v4
         with:
-          name: chunk-${{ matrix.chunk.r }}
-          path: ${{ env.ID }}-v3-${{ matrix.chunk.r }}.mp4
+          name: chunk-${{ matrix.chunk }}
+          path: ${{ env.ID }}-v3-${{ matrix.chunk }}.mp4
           retention-days: 3
           compression-level: 0
