@@ -1,0 +1,8 @@
+{
+  "name": "llb-render",
+  "private": true,
+  "description": "Cloud renderer for HyperFrames explainer videos: one GitHub Actions machine per chunk.",
+  "devDependencies": {
+    "hyperframes": "0.9.69"
+  }
+}
