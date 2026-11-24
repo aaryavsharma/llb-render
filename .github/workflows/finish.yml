@@ -25,9 +25,20 @@ jobs:
       JOB: ${{ inputs.job }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/cache@v4
+        with:
+          path: ~/debs
+          key: debs-v1-ubuntu-24.04-ffmpeg
       - name: Tools
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+          if ls ~/debs/*.deb > /dev/null 2>&1 && sudo dpkg -i ~/debs/*.deb > /dev/null 2>&1; then echo "ffmpeg from cache"
+          else
+            sudo apt-get -f install -y -qq > /dev/null 2>&1 || true
+            mkdir -p ~/debs/partial
+            sudo apt-get update -qq -o Acquire::Retries=3
+            sudo apt-get install -y -qq -o Acquire::Retries=3 -o Dir::Cache::archives="$HOME/debs" ffmpeg > /dev/null
+            sudo rm -rf ~/debs/partial ~/debs/lock; sudo chown -R "$USER" ~/debs
+          fi
           curl -sSL https://downloads.rclone.org/v1.76.0/rclone-v1.76.0-linux-amd64.zip -o rclone.zip
           unzip -q rclone.zip && sudo install rclone-v1.76.0-linux-amd64/rclone /usr/local/bin/rclone
       - name: Read job

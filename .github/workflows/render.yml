@@ -52,9 +52,23 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # the .deb files are kept in the Actions cache: on 24 Nov the Ubuntu mirror took 20+ min on half the machines
+      - uses: actions/cache@v4
+        with:
+          path: ~/debs
+          key: debs-v1-ubuntu-24.04-ffmpeg-noto
       - name: Tools
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-noto-color-emoji fonts-noto-core > /dev/null
+          PKGS="ffmpeg fonts-noto-color-emoji fonts-noto-core"
+          if ls ~/debs/*.deb > /dev/null 2>&1 && sudo dpkg -i ~/debs/*.deb > /dev/null 2>&1; then echo "tools from cache"
+          else
+            sudo apt-get -f install -y -qq > /dev/null 2>&1 || true
+            mkdir -p ~/debs/partial
+            sudo apt-get update -qq -o Acquire::Retries=3
+            sudo apt-get install -y -qq -o Acquire::Retries=3 -o Dir::Cache::archives="$HOME/debs" $PKGS > /dev/null
+            sudo rm -rf ~/debs/partial ~/debs/lock; sudo chown -R "$USER" ~/debs
+          fi
+          ffmpeg -version | head -1
           fc-cache -f > /dev/null
           npm ci --no-audit --no-fund
       - name: Fetch pack, rebuild chunk
