@@ -67,9 +67,15 @@ jobs:
         run: |
           cd chunk
           npx hyperframes render --quality standard --workers auto --protocol-timeout 1200000 -o "$GITHUB_WORKSPACE/$ID-v3-$R.mp4"
+      # the light 720p copy is made here, per chunk and all at once (same settings as before), so finish only joins it
+      - name: Light 720p copy
+        run: |
+          ffmpeg -v error -y -i "$ID-v3-$R.mp4" -an -vf scale=-2:720:flags=lanczos -c:v libx264 -preset slow -tune animation -crf 20 -maxrate 2600k -bufsize 5200k -g 60 -pix_fmt yuv420p "$ID-v3-$R-720.mp4"
       - uses: actions/upload-artifact@v4
         with:
           name: chunk-${{ matrix.chunk }}
-          path: ${{ env.ID }}-v3-${{ matrix.chunk }}.mp4
+          path: |
+            ${{ env.ID }}-v3-${{ matrix.chunk }}.mp4
+            ${{ env.ID }}-v3-${{ matrix.chunk }}-720.mp4
           retention-days: 3
           compression-level: 0
