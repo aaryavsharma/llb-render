@@ -83,6 +83,9 @@ jobs:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
         run: |
           mkdir -p ~/.config/rclone && printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          # make the folder first: two parallel uploads into a missing folder each create one (Drive allows
+          # duplicate names), e.g. the first video of a new subject
+          rclone mkdir "gdrive:$(dirname "$DEST")"
           # both files go up at the same time
           rclone copyto final.mp4 "gdrive:$DEST" --drive-chunk-size 64M --stats-one-line --stats 30s & P1=$!
           rclone copyto lite.mp4 "gdrive:${DEST%.mp4} 720p.mp4" --drive-chunk-size 64M & P2=$!
